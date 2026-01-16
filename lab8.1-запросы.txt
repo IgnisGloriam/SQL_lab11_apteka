@@ -1,0 +1,325 @@
+-----------------------------------------------------
+1
+db.rest.find(
+{}, 
+  { 
+    restaurant_id: 1, 
+    name: 1,
+    borough: 1, 
+    cuisine: 1, 
+    _id: 0 
+  }
+)
+
+
+для американской кухни посчитать в каждом 
+районе кол-во ресторанов
+
+db.rest.aggregate([
+  {
+    $match: {
+      "cuisine": "American "
+    }
+  },
+  {
+    $group: {
+      _id: "$borough",
+      count: { $sum: 1 }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      borough: "$_id",
+      count: 1
+    }
+  }
+])
+
+
+-----------------------------------------------------
+2
+db.rest.find(
+  { borough: "Bronx" }, 
+  { name: 1, _id: 0 }
+)
+.sort({ name: 1 })
+.limit(5)
+
+
+-----------------------------------------------------
+3
+-- наверное неправильно
+db.rest.find(
+  { grades: { $elemMatch: { score: { $gt: 80, $lt: 100 } } } },
+  { name: 1, "grades.score": 1, _id: 0 }
+)
+
+-- если хотим по сумме
+db.rest.aggregate([
+  {
+    $project: {
+      name: 1,
+      borough: 1,
+      totalScore: { $sum: "$grades.score" }
+    }
+  },
+  {
+    $match: {
+      totalScore: { $gt: 80, $lt: 100 }
+    }
+  }
+])
+
+
+
+-----------------------------------------------------
+4
+db.rest.find(
+  {
+    cuisine: { $ne: "American" },
+    "grades.grade": "A",
+    borough: { $ne: "Brooklyn" }
+  },
+  { name: 1, cuisine: 1, borough: 1, _id: 0 }
+).sort({ cuisine: -1 })
+
+
+------ через аггрегатор 
+db.rest.aggregate([
+  {
+    $match: {
+      cuisine: { $ne: "American" },
+      borough { $ne: "Brooklyn" },
+      "grades.grade": "A"
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      name: 1,
+      cuisine: 1,
+      borough: 1
+    }
+  },
+  {
+    $sort: {
+      cuisine: -1
+    }
+  }
+])
+
+
+-----------------------------------------------------
+5
+db.rest.find(
+  { name: { $regex: /^Wil/ } }, 
+  { 
+    restaurant_id: 1, 
+    name: 1, 
+    borough: 1, 
+    cuisine: 1, 
+    _id: 0 
+  }
+)
+
+
+
+-----------------------------------------------------
+6
+db.rest.find({
+  borough: "Bronx",
+  cuisine: { $in: ["American", "Chinese"] }
+},
+{
+  restaurant_id: 1, 
+  name: 1, 
+  borough: 1, 
+  cuisine: 1, 
+  _id: 0 
+})
+
+
+
+-----------------------------------------------------
+7
+db.rest.find(
+  {
+    grades: {
+      $elemMatch: {
+        date: ISODate("2014-08-11T00:00:00Z"),
+        score: 9,
+        grade: "A"
+      }
+    }
+  },
+  {
+    restaurant_id: 1,
+    name: 1,
+    grades: 1,
+    _id: 0
+  }
+)
+
+
+
+-----------------------------------------------------
+8
+db.rest.aggregate([
+  {
+    $group: {
+      _id: {borough: "$borough", cuisine: "$cuisine"},
+      count: { $sum: 1 }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      borough: "$_id.borough",
+      cuisine: "$_id.cuisine",
+      count: 1
+    }
+  },
+  {
+    $sort: {
+      borough: 1,
+      count: -1
+    }
+  }
+])
+
+
+
+-----------------------------------------------------
+9
+db.rest.aggregate([
+  {
+    $group: {
+      _id: {
+        borough: "$borough",
+        cuisine: "$cuisine"
+      },
+      count: { $sum: 1 }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      borough: "$_id.borough",
+      cuisine: "$_id.cuisine",
+      count: 1
+    }
+  },
+  {
+    $sort: {
+      borough: 1,
+      count: -1
+    }
+  }
+])
+
+
+
+
+-----------------------------------------------------
+10
+db.rest.insertOne({
+  address: {
+    building: "1",
+    coord: [123.61, 321.78],
+    street: "First Shosseinaya",
+    zipcode: 123456
+  },
+  borough: "Sredniy",
+  cuisine: "Russian",
+  grades: [
+    {
+      date: ISODate("2025-12-26T10:00:00Z"),
+      grade: "A",
+      score: 100
+    }
+  ],
+  name: "Babushka",
+  restaurant_id: "99999999"
+})
+
+
+db.rest.find({ name: "Babushka" })
+
+
+
+-----------------------------------------------------
+11
+
+db.rest.updateOne(
+  { name: "Babushka" },
+  { 
+    $set: { 
+      working_hours: {
+        monday_friday: "09:00 - 23:00",
+        saturday_sunday: "10:00 - 01:00"
+      }
+    } 
+  }
+)
+ы
+
+
+
+
+-----------------------------------------------------
+12
+
+db.rest.updateOne(
+  { name: "Babushka" },
+  { 
+    $set: { 
+      "working_hours.saturday_sunday": "10:00 - 03:00"
+    } 
+  }
+)
+
+
+
+
+
+-----------------------------------------------------
+
+
+
+
+
+-----------------------------------------------------
+
+
+
+
+-----------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+-----------------------------------------------------
+-----------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
