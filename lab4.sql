@@ -1,0 +1,669 @@
+--a) Процедура без параметров, формирующая список лекарств, 
+-- для которых срок годности заканчивается меньше, 
+-- чем через 1 месяц
+CREATE or alter PROCEDURE GetExpiringMedications
+AS
+BEGIN
+    SELECT 
+        m.name medication_name,
+        d.quantity,
+        d.expiration_date,
+        man.name manufacturer
+    FROM drug d
+    JOIN medication m ON d.medication_id = m.id
+    JOIN manufacturer man ON d.manufacturer_id = man.id
+    WHERE d.expiration_date BETWEEN GETDATE() AND DATEADD(MONTH, 1, GETDATE())
+    ORDER BY d.expiration_date
+END
+
+EXEC GetExpiringMedications
+
+GO
+
+
+
+
+
+
+
+
+
+
+--b) Процедура, на входе получающая название основного действующего вещества
+-- и формирующая список лекарств с этим действующим веществом, упорядоченный по 
+-- возрастанию цены в виде:
+-- название лекарства, цена, производитель
+
+-- Добавить толбец количества 
+
+CREATE or ALTER PROCEDURE GetMedicationsBySubstance
+    @substance_name VARCHAR(100)
+AS
+BEGIN
+    SELECT 
+        m.name medication_name,
+        d.price,
+        d.quantity, ----------------
+        man.name manufacturer
+    FROM medication m
+    JOIN medication_substance ms ON m.id = ms.medication_id
+    JOIN active_substance a ON ms.active_substance_id = a.id
+    JOIN drug d ON m.id = d.medication_id
+    JOIN manufacturer man ON d.manufacturer_id = man.id
+    WHERE a.name = @substance_name
+    ORDER BY d.price
+END
+
+EXEC GetMedicationsBySubstance 'Парацетамол'
+
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--c) Процедура, на входе получающая название лекарства, выходной параметр – 
+-- самый дешевый его аналог с тем же действующим веществом
+
+-- самый дешевый, НО В НАЛИЧИИ
+
+CREATE or ALTER PROCEDURE FindCheapestAnalog
+    @medication_name VARCHAR(100),
+    @cheapest_analog VARCHAR(100) OUTPUT
+AS
+BEGIN
+    DECLARE @substance_id INT
+    
+    SELECT TOP 1 @substance_id = ms.active_substance_id
+    FROM medication m
+    JOIN medication_substance ms ON m.id = ms.medication_id
+    WHERE m.name = @medication_name
+    
+    SELECT TOP 1 @cheapest_analog = m.name
+    FROM medication m
+    JOIN medication_substance ms ON m.id = ms.medication_id
+    JOIN drug d ON m.id = d.medication_id
+    WHERE ms.active_substance_id = @substance_id
+        and d.quantity > 0 ---------------------
+    AND m.name != @medication_name
+    ORDER BY d.price
+    
+    IF @cheapest_analog IS NULL
+        SET @cheapest_analog = 'Аналогов не найдено'
+END
+
+
+DECLARE @cheapest_analog VARCHAR(100)
+EXEC FindCheapestAnalog @medication_name = 'Амоксиклав 625гр', @cheapest_analog = @cheapest_analog OUTPUT
+PRINT @cheapest_analog
+
+GO
+
+
+
+
+
+
+
+
+--d) Процедура, вызывающая вложенную процедуру, 
+-- которая подсчитывает среднее количество наименований лекарств для одной продажи, 
+-- а сама выводит продажи с количеством лекарств, превышающим среднее в виде: 
+-- номер продажи, дата, сумма, кассир
+
+-- СДЕЛАТЬ СРЕДНЕЕ ЧЕРЕЗ ВЫХОДНОЙ ПАРАМЕТР
+
+CREATE OR ALTER PROCEDURE CalculateAverageDrugsPerSale
+ @avg_drugs DECIMAL(10,2) OUTPUT
+AS
+BEGIN
+    -- DECLARE @avg_drugs DECIMAL(10,2);
+    
+    SELECT @avg_drugs = AVG(drug_count)
+    FROM (
+        SELECT COUNT(sc.drug_id)*1.0 drug_count
+        FROM sale_content sc
+        GROUP BY sc.sale_id
+    ) drug_counts
+    
+    -- SELECT @avg_drugs average_drugs_per_sale
+END
+GO
+
+
+
+--SELECT AVG(drug_count)
+--    FROM (
+--        SELECT COUNT(sc.drug_id) drug_count
+--        FROM sale_content sc
+--        GROUP BY sc.sale_id
+--    ) drug_counts
+
+CREATE OR ALTER PROCEDURE GetSalesAboveAverage
+AS
+BEGIN
+    DECLARE @avg_drugs DECIMAL(10,2)
+    
+    -- CREATE TABLE temp_avg (avg_value DECIMAL(10,2))
+    -- INSERT INTO temp_avg EXEC CalculateAverageDrugsPerSale @avg_drugs = @avg_drugs OUTPUT
+    
+    -- SELECT @avg_drugs = avg_value FROM temp_avg
+
+    EXEC CalculateAverageDrugsPerSale @avg_drugs = @avg_drugs OUTPUT
+    
+    SELECT 
+        s.id sale_number,
+        s.sale_date,
+        s.total_amount,
+        e.full_name cashier,
+        COUNT(sc.drug_id) drug_count
+    FROM sale s
+    JOIN employee e ON s.employee_id = e.id
+    JOIN sale_content sc ON s.id = sc.sale_id
+    GROUP BY s.id, s.sale_date, s.total_amount, e.full_name
+    HAVING COUNT(sc.drug_id) >= @avg_drugs
+    
+    --DROP TABLE temp_avg
+END
+GO
+
+
+DECLARE @mid DECIMAL(10,2)
+EXEC CalculateAverageDrugsPerSale @avg_drugs = @mid OUTPUT
+print(@mid)
+EXEC GetSalesAboveAverage
+
+
+
+
+SELECT SUM(drug_count)*1.0 , COUNT(drug_count)
+    FROM (
+        SELECT COUNT(sc.drug_id) drug_count
+        FROM sale_content sc
+        GROUP BY sc.sale_id
+    ) drug_counts
+    
+
+
+
+
+
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+--a) Скалярная функция, возвращающая выручку аптеки на заданную дату
+
+CREATE OR ALTER FUNCTION GetDailyRevenue(@sale_date DATE)
+RETURNS DECIMAL(10,2)
+AS
+BEGIN
+    DECLARE @revenue DECIMAL(10,2)
+    
+    SELECT @revenue = COALESCE(SUM(total_amount), 0)
+    FROM sale
+    WHERE sale_date = @sale_date
+    
+    RETURN @revenue
+END
+GO
+
+SELECT dbo.GetDailyRevenue(CAST('2020-11-11' AS DATE))
+
+
+
+
+
+
+
+
+
+--b) Inline-функция, возвращающая список лекарств и их количество, проданных на заданную дату
+
+CREATE OR ALTER FUNCTION GetSoldDrugsByDate(@sale_date DATE)
+RETURNS TABLE
+AS
+RETURN
+    SELECT 
+        m.name medication_name,
+        SUM(sc.quantity) total_sold
+    FROM sale s
+    JOIN sale_content sc ON s.id = sc.sale_id
+    JOIN drug d ON sc.drug_id = d.id
+    JOIN medication m ON d.medication_id = m.id
+    WHERE s.sale_date = @sale_date
+    GROUP BY m.name
+GO
+
+
+SELECT * FROM dbo.GetSoldDrugsByDate(CAST('2025-01-01' AS DATE))
+
+
+
+
+
+
+
+
+
+--c) Multi-statement-функция, выдающая список лекарств от заданной болезни, 
+-- имеющихся в аптеке с указанием количества упаковок
+
+CREATE OR ALTER FUNCTION GetMedicationsForDisease(@disease_name VARCHAR(100))
+RETURNS @result TABLE (
+    medication_name VARCHAR(100),
+    manufacturer VARCHAR(100),
+    quantity INT,
+    price DECIMAL(10,2)
+)
+AS
+BEGIN
+    INSERT INTO @result
+    SELECT 
+        m.name medication_name,
+        man.name manufacturer,
+        d.quantity,
+        d.price
+    FROM disease dis
+    JOIN medication_indication mi ON dis.id = mi.disease_id
+    JOIN medication m ON mi.medication_id = m.id
+    JOIN drug d ON m.id = d.medication_id
+    JOIN manufacturer man ON d.manufacturer_id = man.id
+    WHERE dis.name = @disease_name
+    AND d.quantity > 0
+    
+    RETURN
+END
+GO
+
+
+
+SELECT * FROM dbo.GetMedicationsForDisease('Депрессия')
+
+
+
+
+
+---------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- a) Триггер любого типа на добавление лекарства в заказ: 
+-- при добавлении нового лекарства проверить, сформирован ли уже заказ на сегодня, если нет, 
+-- то создать новый заказ на текущую дату и добавить туда лекарство. 
+-- Если на сегодня заказ есть, то лекарство добавляется к нему
+
+CREATE OR ALTER TRIGGER trg_InsteadOfInsertOrderContent
+ON order_content
+INSTEAD OF INSERT
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    DECLARE @Today DATE = CAST(GETDATE() AS DATE)
+    DECLARE @ClientId INT
+    DECLARE @DrugId INT
+    DECLARE @Quantity INT
+    DECLARE @OrderId INT
+    DECLARE @OriginalOrderId INT
+    DECLARE @Price DECIMAL(10,2)
+    DECLARE @LineTotal DECIMAL(10,2)
+    DECLARE @ExistingOrderId INT
+    DECLARE @ExistingQuantity INT
+    
+    DECLARE @TempData TABLE (
+        id INT IDENTITY(1,1),
+        client_id INT,
+        drug_id INT,
+        quantity INT,
+        original_order_id INT,
+        today_order_id INT,
+        price DECIMAL(10,2),
+        processed BIT DEFAULT 0
+    )
+    
+    INSERT INTO @TempData (client_id, drug_id, quantity, original_order_id, price)
+    SELECT DISTINCT
+        o.client_id,
+        i.drug_id,
+        i.quantity,
+        i.order_id,
+        d.price
+    FROM inserted i
+    JOIN [order] o ON i.order_id = o.id
+    JOIN drug d ON i.drug_id = d.id
+    
+
+    DECLARE @CurrentId INT
+    DECLARE cur CURSOR LOCAL FOR
+    SELECT 
+        id,
+        client_id,
+        drug_id,
+        quantity,
+        original_order_id,
+        price
+    FROM @TempData
+    WHERE processed = 0
+    ORDER BY id
+    
+    OPEN cur
+    FETCH NEXT FROM cur INTO @CurrentId, @ClientId, @DrugId, @Quantity, @OriginalOrderId, @Price
+    
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @ExistingOrderId = NULL
+        
+        SELECT @ExistingOrderId = id 
+        FROM [order] 
+        WHERE client_id = @ClientId AND CAST(order_date AS DATE) = @Today
+        
+        IF @ExistingOrderId IS NULL
+        BEGIN
+            INSERT INTO [order] (order_date, total_amount, client_id)
+            VALUES (@Today, 0, @ClientId)
+            
+            SET @ExistingOrderId = SCOPE_IDENTITY()
+            
+            PRINT 'Создан новый заказ ' + CAST(@ExistingOrderId AS VARCHAR) + ' для клиента ' + CAST(@ClientId AS VARCHAR)
+        END
+        ELSE
+        BEGIN
+            PRINT 'Найден существующий заказ ' + CAST(@ExistingOrderId AS VARCHAR) + ' для клиента ' + CAST(@ClientId AS VARCHAR)
+        END
+        
+        SET @ExistingQuantity = NULL
+        SELECT @ExistingQuantity = quantity
+        FROM order_content
+        WHERE drug_id = @DrugId AND order_id = @ExistingOrderId
+        
+        SET @LineTotal = @Price * @Quantity
+        
+        IF @ExistingQuantity IS NOT NULL
+        BEGIN
+            UPDATE order_content
+            SET quantity = @ExistingQuantity + @Quantity
+            WHERE drug_id = @DrugId AND order_id = @ExistingOrderId
+            
+            PRINT 'Обновлено количество лекарства ' + CAST(@DrugId AS VARCHAR) + ' в заказе ' + CAST(@ExistingOrderId AS VARCHAR)
+        END
+        ELSE
+        BEGIN
+            INSERT INTO order_content (drug_id, order_id, quantity)
+            VALUES (@DrugId, @ExistingOrderId, @Quantity)
+            
+            PRINT 'Добавлено лекарство ' + CAST(@DrugId AS VARCHAR) + ' в заказ ' + CAST(@ExistingOrderId AS VARCHAR)
+        END
+        
+
+        UPDATE [order] 
+        SET total_amount = total_amount + @LineTotal
+        WHERE id = @ExistingOrderId
+        
+
+        UPDATE @TempData
+        SET today_order_id = @ExistingOrderId, processed = 1
+        WHERE id = @CurrentId
+        
+        FETCH NEXT FROM cur INTO @CurrentId, @ClientId, @DrugId, @Quantity, @OriginalOrderId, @Price
+    END
+    
+    CLOSE cur
+    DEALLOCATE cur
+    
+    DECLARE update_cur CURSOR LOCAL FOR
+    SELECT drug_id, quantity
+    FROM @TempData
+    
+    OPEN update_cur
+    FETCH NEXT FROM update_cur INTO @DrugId, @Quantity
+    
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        UPDATE drug
+        SET quantity = quantity - @Quantity
+        WHERE id = @DrugId AND quantity >= @Quantity
+        
+        FETCH NEXT FROM update_cur INTO @DrugId, @Quantity
+    END
+    
+    CLOSE update_cur
+    DEALLOCATE update_cur
+END
+
+
+select * from [order]
+select * from order_content
+
+INSERT INTO order_content (drug_id, order_id, quantity) VALUES
+(1, 1, 2),
+(2, 1, 3),
+(3, 2, 1)
+
+INSERT INTO order_content (drug_id, order_id, quantity) VALUES
+(3, 2, 1)
+
+INSERT INTO order_content (drug_id, order_id, quantity) VALUES
+(2, 1, 1),
+(3, 3, 1),
+(4, 4, 1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- b)  Последующий триггер на изменение количества лекарства в аптеке – 
+-- если количество упаковок лекарства < 3, формируем строку с заказом 
+-- на это лекарство
+
+CREATE OR ALTER TRIGGER trg_DrugLowQuantity
+ON drug
+AFTER UPDATE, INSERT
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    DECLARE @DrugId INT, 
+            @Quantity INT,
+            @ErrorString VARCHAR
+
+    DECLARE drug_cursor CURSOR FOR
+    SELECT i.id, i.quantity
+    FROM inserted i
+    WHERE i.quantity < 3
+    
+    OPEN drug_cursor
+    FETCH NEXT FROM drug_cursor INTO @DrugId, @Quantity
+    
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        PRINT 'Лекарство с ID=' + CAST(@DrugId AS VARCHAR) + 
+                ' имеется в количестве: ' + CAST(@Quantity AS VARCHAR) + ' штук'
+        FETCH NEXT FROM drug_cursor INTO @DrugId, @Quantity
+    END
+
+    IF EXISTS (SELECT * FROM inserted WHERE quantity < 3)
+    BEGIN        
+        RAISERROR('Не хватает товаров на складе', 16, 1);
+    END
+    
+    CLOSE drug_cursor
+    DEALLOCATE drug_cursor
+END
+
+
+
+SELECT id, quantity FROM drug
+
+
+UPDATE drug
+SET quantity = quantity + 200
+WHERE id < 3
+
+
+
+
+
+
+
+
+
+
+-- c) Замещающий триггер на операцию удаления лекарства из списка купленных 
+-- покупателем лекарств – если покупатель передумал покупать только 
+-- что купленное лекарство, то выполняем операцию возврата 
+-- (удаляем это лекарство из списка купленных этим покупателем лекарств, 
+-- возвращаем его в аптеку, пересчитываем сумму чека для покупателя).
+
+
+CREATE OR ALTER TRIGGER trg_InsteadOfDeleteOrderContent
+ON order_content
+INSTEAD OF DELETE
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    DECLARE @order_id INT, @drug_id INT, @quantity INT
+    
+    DECLARE cur CURSOR FOR 
+    SELECT drug_id, order_id, quantity 
+    FROM deleted
+    
+    OPEN cur
+    
+    FETCH NEXT FROM cur INTO @drug_id, @order_id, @quantity
+    
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        UPDATE drug 
+        SET quantity = quantity + @quantity 
+        WHERE id = @drug_id;
+        
+
+
+        DELETE FROM order_content 
+        WHERE drug_id = @drug_id AND order_id = @order_id;
+        
+
+
+        UPDATE [order]
+        SET total_amount = (
+            SELECT ISNULL(SUM(d.price * oc.quantity), 0)
+            FROM order_content oc
+            JOIN drug d ON oc.drug_id = d.id
+            WHERE oc.order_id = @order_id
+        )
+        WHERE id = @order_id
+        
+        FETCH NEXT FROM cur INTO @drug_id, @order_id, @quantity
+    END
+    
+    CLOSE cur
+    DEALLOCATE cur
+END
+
+
+
+INSERT INTO order_content (drug_id, order_id, quantity) VALUES
+(3, 2, 5)
+
+DELETE FROM order_content
+WHERE drug_id = 3 AND order_id = 24
+
+SELECT * FROM order_content
+WHERE order_id = 24
+
+SELECT * FROM drug
+WHERE id = 2
+
+
+select * from [order]
